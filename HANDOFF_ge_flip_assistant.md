@@ -455,17 +455,14 @@ runs actuator; returns `{status, pid?, error?}`.
 ---
 
 ## 9. Validated Reference Code (Component B)
-Tested against the live API this session.
-```python
-def ge_tax(sell, name, cfg):
-    if sell < cfg["free_below"]: return 0
-    if name.lower() in {n.lower() for n in cfg.get("exempt_items", [])}: return 0
-    return min(int(sell * cfg["rate"]), cfg["per_item_cap"])
-```
-- **Scorer** (price percentile + margin-anomaly + volume + trend) and **backfill** via
-  `/timeseries?timestep=24h&id=` (returned ~365 pts/item) were tested and produced sensible
-  GOOD/RISKY verdicts. A runnable starter (`ge_flip_watcher.py`, `flip_db.py`, `config.json`,
-  `README.md`) was produced alongside this spec as a proven Component-B skeleton.
+
+Tested against the live API during spec research. **In this repo:**
+
+- `companion/tax.py` — GE tax function (verified cases in `companion/tests/test_tax.py`)
+- `companion/ge_flip_watcher.py`, `companion/config.py`, `companion/models.py` — scaffold
+- `companion/wiki_client.py`, `companion/engine.py` — **Phase 1 implementation targets**
+
+Scorer and backfill logic are specified in §3.3 and implemented in Phase 2 (`flip_db.py`).
 
 ## 10. Tech Stack Summary
 - **Component A:** Java 11, Gradle, IntelliJ; RuneLite API + Guice + Swing + OkHttp; Plugin Hub;

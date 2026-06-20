@@ -1,0 +1,11 @@
+requests>=2.31.0,<3
+
+# dev / test
+pytest>=8.0.0,<9
+
+# Phase 3+
+# win11toast>=0.33
+# discord.py>=2.3
+# Phase 4+
+# pyautogui>=0.9.54
+# pillow>=10.0.0

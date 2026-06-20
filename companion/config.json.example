@@ -1,0 +1,65 @@
+{
+  "active_plugin": "standalone",
+  "user_agent": "ge-flip-assistant - REPLACE_ME@example.com",
+  "localhost_port": 8765,
+  "plugin_ge_state_port": 8766,
+  "poll_seconds": 60,
+  "scan_all": true,
+  "watchlist": [],
+  "blocklist": ["Old school bond"],
+  "filters": {
+    "min_profit_per_item": 50,
+    "min_roi_pct": 1.5,
+    "min_hourly_volume": 200,
+    "min_buy_price": 100,
+    "max_buy_price": 50000000,
+    "max_price_age_minutes": 30
+  },
+  "undercut": 0,
+  "alert_cooldown_minutes": 30,
+  "max_alerts_per_cycle": 3,
+  "notify_method": "windows",
+  "discord": {
+    "webhook_url": ""
+  },
+  "openclaw": {
+    "alerts_file": "alerts.jsonl",
+    "actuator_script": "ge_flip_actuator.py"
+  },
+  "execution": {
+    "mode": "approve_then_execute",
+    "auto_execute_min_verdict": "GOOD",
+    "post_notify_grace_seconds": 300,
+    "runelite_window_title": "RuneScape",
+    "ge_keybind": null,
+    "click_delay_ms": 150,
+    "click_jitter_ms": 50,
+    "dry_run": true,
+    "max_actions_per_hour": 60,
+    "screenshot_on_failure": true,
+    "plugin_ge_state_url": "http://127.0.0.1:8766/ge-state"
+  },
+  "history": {
+    "enabled": true,
+    "db_path": "flip_history.db",
+    "backfill_timestep": "24h",
+    "score_window_points": 120,
+    "min_history_points": 10,
+    "suppress_avoid": true,
+    "buy_high_percentile": 0.85,
+    "buy_low_percentile": 0.35,
+    "margin_anomaly_ratio": 2.5,
+    "thin_volume_ratio": 0.3,
+    "downtrend_pct": 0.10
+  },
+  "ge_tax": {
+    "rate": 0.02,
+    "per_item_cap": 5000000,
+    "free_below": 50,
+    "exempt_items": ["Old school bond"]
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "logs/runeclaw.log"
+  }
+}

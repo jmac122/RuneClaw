@@ -173,6 +173,18 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+# RuneClaw — local runtime data
+companion/config.json
+companion/*.db
+companion/alerts.jsonl
+logs/*.log
+logs/actuator/
+
+# Java / RuneLite plugin
+plugin/build/
+plugin/.gradle/
+.idea/
+
 # Cursor  
 #  Cursor is an AI-powered code editor.`.cursorignore` specifies files/directories to 
 #  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
