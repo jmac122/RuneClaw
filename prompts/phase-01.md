@@ -44,7 +44,8 @@ Implement **HANDOFF_ge_flip_assistant.md Build Phase 1 (§7.1)**. Follow **CLAUD
 ```bash
 cd companion
 pip install -r requirements.txt
-cp config.json.example config.json   # if config.json missing; set real user_agent
+python ../scripts/setup_config.py
+# Edit config.json — set real user_agent
 pytest tests -q
 python ge_flip_watcher.py --once
 ```

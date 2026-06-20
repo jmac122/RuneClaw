@@ -23,16 +23,31 @@ optionally place offers via an external click actuator.
 ## Quick start
 
 ```bash
-cd companion
+# From repo root (recommended)
 python -m venv .venv
 # Windows: .venv\Scripts\activate
 # macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
-cp config.json.example config.json
-# Edit config.json — set user_agent (required by Wiki API)
+python scripts/setup_config.py
+# Edit companion/config.json — set user_agent (required by Wiki API)
 
-# From repo root:
 python companion/ge_flip_watcher.py --once
+```
+
+Or work inside `companion/`:
+
+```bash
+cd companion
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+**Windows (PowerShell)** — copy config without `cp`:
+
+```powershell
+python scripts/setup_config.py
+# or: Copy-Item companion\config.json.example companion\config.json
 ```
 
 Run tests:
