@@ -70,6 +70,18 @@ def resolve_history_db_path(config: AppConfig) -> Path:
     return _relative_to_config(config, db_path)
 
 
+def resolve_alerts_path(config: AppConfig) -> Path:
+    """Resolve `openclaw.alerts_file` relative to the config file directory."""
+    alerts_file = config.raw.get("openclaw", {}).get("alerts_file", "alerts.jsonl")
+    return _relative_to_config(config, alerts_file)
+
+
+def resolve_actuator_script(config: AppConfig) -> Path:
+    """Resolve `openclaw.actuator_script` relative to the config file directory."""
+    script = config.raw.get("openclaw", {}).get("actuator_script", "ge_flip_actuator.py")
+    return _relative_to_config(config, script)
+
+
 def _relative_to_config(config: AppConfig, value: str) -> Path:
     path = Path(value)
     if not path.is_absolute():

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -16,16 +17,29 @@ _COMPANION_ROOT = Path(__file__).resolve().parent
 if str(_COMPANION_ROOT.parent) not in sys.path:
     sys.path.insert(0, str(_COMPANION_ROOT.parent))
 
-from companion.config import default_config_path, load_config, resolve_history_db_path
+from companion.config import (
+    default_config_path,
+    load_config,
+    resolve_actuator_script,
+    resolve_alerts_path,
+    resolve_history_db_path,
+)
+from companion.delivery import Notifier
 from companion.engine import evaluate_opportunities, format_opportunity_line
+from companion.execution_orchestrator import Orchestrator
 from companion.flip_db import FlipDB
 from companion.logging_setup import setup_logging
 from companion.models import AppConfig, Opportunity, ScoreResult, ScoringParams, Verdict
 from companion.scoring import score_item
+from companion.server import make_server
 from companion.tax import ge_tax
 from companion.wiki_client import WikiClient
 
 log = logging.getLogger("runeclaw.cli")
+
+# Per cycle, score at most this many top opportunities to find alert candidates.
+# Bounds the per-item timeseries backfill well below the full catalogue.
+_WATCH_SCORE_LIMIT = 15
 
 
 class ItemNotFound(Exception):
@@ -67,6 +81,26 @@ def build_parser() -> argparse.ArgumentParser:
         "score", help="Score current buy quality for an item (name or id)"
     )
     p_score.add_argument("item", help="Item name (quoted) or numeric id")
+
+    p_watch = sub.add_parser(
+        "watch", help="Poll loop: scan, score, alert + orchestrate qualifying flips"
+    )
+    p_watch.add_argument(
+        "--cycles", type=int, default=0, help="Stop after N cycles (0 = run forever)"
+    )
+    p_watch.add_argument(
+        "--interval", type=int, default=0,
+        help="Seconds between cycles (0 = config poll_seconds)",
+    )
+    sub.add_parser("pending", help="List pending actions awaiting approval")
+    p_exec = sub.add_parser("execute", help="Approve and run a pending action")
+    p_exec.add_argument("action_id", help="Pending action id (see `pending`)")
+    sub.add_parser("execute-latest", help="Approve and run the most recent pending action")
+    p_cancel = sub.add_parser(
+        "cancel-execution", help="Cancel a pending action (default: the latest)"
+    )
+    p_cancel.add_argument("action_id", nargs="?", help="Pending action id (optional)")
+    sub.add_parser("serve", help="Serve the loopback orchestration API (GET /pending, POST /execute)")
     return parser
 
 
@@ -141,6 +175,20 @@ def cmd_once(args: argparse.Namespace) -> int:
     return 0
 
 
+def _score_opp(
+    db: FlipDB,
+    wiki: WikiClient,
+    opp: Opportunity,
+    params: ScoringParams,
+    timestep: str,
+) -> ScoreResult:
+    """Backfill-on-first-sight and score one opportunity against its history."""
+    entry = {"id": opp.id, "name": opp.name, "limit": opp.limit}
+    _ensure_backfilled(db, wiki, entry, timestep)
+    history = db.get_price_history(opp.id, timestep, params.score_window_points)
+    return score_item(opp.buy, opp.sell, history, params)
+
+
 def _score_opportunities(
     config: AppConfig, wiki: WikiClient, opps: list[Opportunity]
 ) -> tuple[list[tuple[Opportunity, ScoreResult]], int]:
@@ -155,15 +203,17 @@ def _score_opportunities(
     suppressed = 0
     with FlipDB(resolve_history_db_path(config)) as db:
         for opp in opps:
-            entry = {"id": opp.id, "name": opp.name, "limit": opp.limit}
-            _ensure_backfilled(db, wiki, entry, timestep)
-            history = db.get_price_history(opp.id, timestep, params.score_window_points)
-            result = score_item(opp.buy, opp.sell, history, params)
+            result = _score_opp(db, wiki, opp, params, timestep)
             if params.suppress_avoid and result.verdict == Verdict.AVOID:
                 suppressed += 1
                 continue
             pairs.append((opp, result))
     return pairs, suppressed
+
+
+def _build_orchestrator(config: AppConfig, db: FlipDB) -> Orchestrator:
+    notifier = Notifier(config, resolve_alerts_path(config))
+    return Orchestrator(config, db, notifier, resolve_actuator_script(config))
 
 
 def cmd_backfill(args: argparse.Namespace) -> int:
@@ -216,6 +266,117 @@ def cmd_score(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_watch(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    setup_logging(config)
+    wiki = WikiClient(config)
+    interval = args.interval or config.poll_seconds
+    with FlipDB(resolve_history_db_path(config)) as db:
+        orchestrator = _build_orchestrator(config, db)
+        cycle = 0
+        while True:
+            alerts = _watch_cycle(config, wiki, db, orchestrator)
+            cycle += 1
+            log.info("Cycle %d complete: %d alert(s).", cycle, alerts)
+            if args.cycles > 0 and cycle >= args.cycles:
+                break
+            time.sleep(interval)
+    return 0
+
+
+def _watch_cycle(
+    config: AppConfig, wiki: WikiClient, db: FlipDB, orchestrator: Orchestrator
+) -> int:
+    """One poll iteration: scan, score the top opportunities, orchestrate GOOD ones."""
+    opportunities = evaluate_opportunities(config, wiki)
+    if not opportunities:
+        return 0
+    params = ScoringParams.from_config(config)
+    timestep = config.history.get("backfill_timestep", "24h")
+    max_alerts = config.max_alerts_per_cycle
+    alerted = 0
+    for opp in opportunities[:_WATCH_SCORE_LIMIT]:
+        if alerted >= max_alerts:
+            break
+        result = _score_opp(db, wiki, opp, params, timestep)
+        if result.verdict is not Verdict.GOOD:
+            continue
+        outcome = orchestrator.handle(opp, result)
+        log.info("%s (id=%d): %s", opp.name, opp.id, outcome)
+        if outcome in ("notified", "pending", "executed"):
+            alerted += 1
+    return alerted
+
+
+def cmd_pending(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    setup_logging(config)
+    now = int(time.time())
+    with FlipDB(resolve_history_db_path(config)) as db:
+        db.expire_stale(now)
+        actions = db.list_pending()
+    if not actions:
+        print("No pending actions.")
+        return 0
+    for a in actions:
+        remaining = max(0, a.expires_at - now)
+        print(
+            f"{a.action_id}  {a.action}  {a.name} (id={a.item_id})  "
+            f"price={a.price:,}  qty={a.qty:,}  {a.verdict}  "
+            f"status={a.status}  expires in {remaining}s"
+        )
+    return 0
+
+
+def _print_execution_result(result: dict[str, Any]) -> int:
+    status = result.get("status")
+    detail = f" — {result['error']}" if result.get("error") else ""
+    dry = " (dry_run)" if result.get("dry_run") else ""
+    action_id = result.get("action_id", "")
+    print(f"{action_id} {status}{dry}{detail}".strip())
+    return 0 if status in ("done", "executing", "pending", "cancelled") else 1
+
+
+def cmd_execute(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    setup_logging(config)
+    with FlipDB(resolve_history_db_path(config)) as db:
+        result = _build_orchestrator(config, db).execute(args.action_id)
+    return _print_execution_result(result)
+
+
+def cmd_execute_latest(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    setup_logging(config)
+    with FlipDB(resolve_history_db_path(config)) as db:
+        result = _build_orchestrator(config, db).execute_latest()
+    return _print_execution_result(result)
+
+
+def cmd_cancel(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    setup_logging(config)
+    with FlipDB(resolve_history_db_path(config)) as db:
+        result = _build_orchestrator(config, db).cancel(args.action_id)
+    return _print_execution_result(result)
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    setup_logging(config)
+    with FlipDB(resolve_history_db_path(config)) as db:
+        orchestrator = _build_orchestrator(config, db)
+        server = make_server(config.localhost_port, orchestrator, db)
+        log.info("Serving orchestration API on http://127.0.0.1:%d", config.localhost_port)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            log.info("Shutting down server.")
+        finally:
+            server.server_close()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -224,9 +385,24 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_backfill(args)
         if args.command == "score":
             return cmd_score(args)
+        if args.command == "watch":
+            return cmd_watch(args)
+        if args.command == "pending":
+            return cmd_pending(args)
+        if args.command == "execute":
+            return cmd_execute(args)
+        if args.command == "execute-latest":
+            return cmd_execute_latest(args)
+        if args.command == "cancel-execution":
+            return cmd_cancel(args)
+        if args.command == "serve":
+            return cmd_serve(args)
         if args.once:
             return cmd_once(args)
-        parser.error("No command. Use --once, or 'backfill <item>' / 'score <item>'.")
+        parser.error(
+            "No command. Use --once, or a subcommand: "
+            "watch / pending / execute / score / backfill / serve."
+        )
     except ItemNotFound as exc:
         print(exc, file=sys.stderr)
         return 1

@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
-from companion.models import PricePoint, Verdict
+from companion.models import PendingAction, PricePoint, Verdict
 
 log = logging.getLogger("runeclaw.db")
 
@@ -49,7 +49,46 @@ CREATE TABLE IF NOT EXISTS observations (
     verdict TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_obs_item_ts ON observations(item_id, ts);
+CREATE TABLE IF NOT EXISTS pending_actions (
+    action_id    TEXT PRIMARY KEY,
+    created_at   INTEGER NOT NULL,
+    expires_at   INTEGER NOT NULL,
+    action       TEXT NOT NULL,
+    item_id      INTEGER NOT NULL,
+    name         TEXT NOT NULL,
+    price        INTEGER NOT NULL,
+    qty          INTEGER NOT NULL,
+    slot         INTEGER,
+    verdict      TEXT,
+    status       TEXT NOT NULL,
+    error        TEXT,
+    completed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_pending_status ON pending_actions(status);
 """
+
+_PENDING_COLUMNS = (
+    "action_id, created_at, expires_at, action, item_id, name, price, qty, "
+    "slot, verdict, status, error, completed_at"
+)
+
+
+def _row_to_pending(row: sqlite3.Row) -> PendingAction:
+    return PendingAction(
+        action_id=row["action_id"],
+        created_at=row["created_at"],
+        expires_at=row["expires_at"],
+        action=row["action"],
+        item_id=row["item_id"],
+        name=row["name"],
+        price=row["price"],
+        qty=row["qty"],
+        slot=row["slot"],
+        verdict=row["verdict"],
+        status=row["status"],
+        error=row["error"],
+        completed_at=row["completed_at"],
+    )
 
 
 def _opt_int(value: Any) -> int | None:
@@ -195,3 +234,79 @@ class FlipDB:
             ),
         )
         self._conn.commit()
+
+    # -- pending actions ------------------------------------------------------
+
+    def create_pending(self, action: PendingAction) -> None:
+        self._conn.execute(
+            f"INSERT INTO pending_actions ({_PENDING_COLUMNS}) "
+            f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                action.action_id,
+                action.created_at,
+                action.expires_at,
+                action.action,
+                action.item_id,
+                action.name,
+                action.price,
+                action.qty,
+                action.slot,
+                action.verdict,
+                action.status,
+                action.error,
+                action.completed_at,
+            ),
+        )
+        self._conn.commit()
+
+    def get_pending(self, action_id: str) -> PendingAction | None:
+        row = self._conn.execute(
+            f"SELECT {_PENDING_COLUMNS} FROM pending_actions WHERE action_id = ?",
+            (action_id,),
+        ).fetchone()
+        return _row_to_pending(row) if row else None
+
+    def list_pending(self, statuses: tuple[str, ...] = ("pending",)) -> list[PendingAction]:
+        placeholders = ", ".join("?" for _ in statuses)
+        cur = self._conn.execute(
+            f"SELECT {_PENDING_COLUMNS} FROM pending_actions "
+            f"WHERE status IN ({placeholders}) ORDER BY created_at DESC",
+            statuses,
+        )
+        return [_row_to_pending(r) for r in cur.fetchall()]
+
+    def latest_pending(self) -> PendingAction | None:
+        row = self._conn.execute(
+            f"SELECT {_PENDING_COLUMNS} FROM pending_actions "
+            f"WHERE status = 'pending' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        return _row_to_pending(row) if row else None
+
+    def update_status(
+        self,
+        action_id: str,
+        status: str,
+        error: str | None = None,
+        completed_at: int | None = None,
+    ) -> None:
+        self._conn.execute(
+            """
+            UPDATE pending_actions
+            SET status = ?,
+                error = COALESCE(?, error),
+                completed_at = COALESCE(?, completed_at)
+            WHERE action_id = ?
+            """,
+            (status, error, completed_at, action_id),
+        )
+        self._conn.commit()
+
+    def expire_stale(self, now: int) -> int:
+        """Mark pending actions past their grace window as expired. Returns count expired."""
+        cur = self._conn.execute(
+            "UPDATE pending_actions SET status = 'expired' "
+            "WHERE status = 'pending' AND expires_at < ?",
+            (now,),
+        )
+        self._conn.commit()
+        return cur.rowcount

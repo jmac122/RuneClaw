@@ -5,7 +5,18 @@ from __future__ import annotations
 from typing import Any
 
 from companion.flip_db import FlipDB
-from companion.models import Verdict
+from companion.models import PendingAction, Verdict
+
+
+def _pending(
+    action_id: str = "a1", status: str = "pending",
+    created_at: int = 1000, expires_at: int = 2000,
+) -> PendingAction:
+    return PendingAction(
+        action_id=action_id, created_at=created_at, expires_at=expires_at,
+        action="place_buy", item_id=4151, name="Abyssal whip", price=1000,
+        qty=70, slot=None, verdict="GOOD", status=status,
+    )
 
 
 def _points(n: int, start_ts: int = 1_000) -> list[dict[str, Any]]:
@@ -86,3 +97,40 @@ def test_insert_observation_smoke() -> None:
     with FlipDB(":memory:") as db:
         db.upsert_item(1, "Test", 100, 0)
         db.insert_observation(1, 1000, 1050, 50, 29, 2.9, 900, Verdict.GOOD)
+
+
+def test_pending_create_and_get() -> None:
+    with FlipDB(":memory:") as db:
+        db.create_pending(_pending())
+        action = db.get_pending("a1")
+        assert action is not None
+        assert action.action == "place_buy"
+        assert action.price == 1000
+        assert db.get_pending("missing") is None
+
+
+def test_pending_list_and_latest() -> None:
+    with FlipDB(":memory:") as db:
+        db.create_pending(_pending("a1", created_at=1000))
+        db.create_pending(_pending("a2", created_at=2000))
+        assert {p.action_id for p in db.list_pending()} == {"a1", "a2"}
+        assert db.latest_pending().action_id == "a2"  # most recent created_at
+
+
+def test_pending_update_status_removes_from_pending_list() -> None:
+    with FlipDB(":memory:") as db:
+        db.create_pending(_pending("a1"))
+        db.update_status("a1", "done", completed_at=1234)
+        action = db.get_pending("a1")
+        assert action.status == "done"
+        assert action.completed_at == 1234
+        assert db.list_pending() == []  # no longer pending
+
+
+def test_pending_expire_stale() -> None:
+    with FlipDB(":memory:") as db:
+        db.create_pending(_pending("old", expires_at=500))
+        db.create_pending(_pending("fresh", expires_at=5000))
+        assert db.expire_stale(now=1000) == 1
+        assert db.get_pending("old").status == "expired"
+        assert db.get_pending("fresh").status == "pending"
