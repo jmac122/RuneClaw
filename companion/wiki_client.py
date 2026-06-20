@@ -36,13 +36,29 @@ class WikiClient:
             raise ValueError("/mapping did not return a list")
         return payload
 
-    def fetch_latest(self) -> dict[str, dict[str, Any]]:
-        """GET /latest — instabuy/instasell prices keyed by item-id string."""
-        return self._get_data("/latest")
+    def fetch_latest(self, item_id: int | None = None) -> dict[str, dict[str, Any]]:
+        """GET /latest — instabuy/instasell prices keyed by item-id string.
+
+        Pass ``item_id`` to query a single item (``/latest?id=``) instead of all ~4,500.
+        """
+        path = "/latest" if item_id is None else f"/latest?id={item_id}"
+        return self._get_data(path)
 
     def fetch_1h(self) -> dict[str, dict[str, Any]]:
         """GET /1h — hourly avg price + volume aggregates, keyed by item-id string."""
         return self._get_data("/1h")
+
+    def fetch_timeseries(self, item_id: int, timestep: str) -> list[dict[str, Any]]:
+        """GET /timeseries — up to ~365 points for one item at the given timestep.
+
+        ``timestep`` is one of ``5m | 1h | 6h | 24h``. Each point is
+        ``{timestamp, avgHighPrice, avgLowPrice, highPriceVolume, lowPriceVolume}``.
+        """
+        payload = self._get(f"/timeseries?timestep={timestep}&id={item_id}")
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, list):
+            raise ValueError("/timeseries response missing 'data' list")
+        return data
 
     def _get_data(self, path: str) -> dict[str, dict[str, Any]]:
         payload = self._get(path)

@@ -61,6 +61,16 @@ def _validate(raw: dict) -> None:
 def resolve_data_path(config: AppConfig, key: str, default: str) -> Path:
     """Resolve a config path relative to the config file directory."""
     value = config.raw.get(key, default)
+    return _relative_to_config(config, value)
+
+
+def resolve_history_db_path(config: AppConfig) -> Path:
+    """Resolve `history.db_path` relative to the config file directory."""
+    db_path = config.history.get("db_path", "flip_history.db")
+    return _relative_to_config(config, db_path)
+
+
+def _relative_to_config(config: AppConfig, value: str) -> Path:
     path = Path(value)
     if not path.is_absolute():
         path = Path(config.path).parent / path
