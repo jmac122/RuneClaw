@@ -1,6 +1,8 @@
 """OSRS Wiki Real-time Prices API client (handoff §4.1).
 
-Phase 1: implement fetch_mapping, fetch_latest, fetch_1h and bulk helpers here.
+All endpoints share one base URL and a descriptive ``User-Agent`` (the Wiki
+blocks default/library UAs). ``/latest`` and ``/1h`` wrap their payload in a
+top-level ``"data"`` object keyed by item-id string; ``/mapping`` is a bare list.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from companion.models import AppConfig
 log = logging.getLogger("runeclaw.wiki")
 
 WIKI_BASE = "https://prices.runescape.wiki/api/v1/osrs"
+_TIMEOUT_SECONDS = 30
 
 
 class WikiClient:
@@ -24,20 +27,33 @@ class WikiClient:
         self._session.headers["User-Agent"] = config.user_agent
 
     def fetch_mapping(self) -> list[dict[str, Any]]:
-        """GET /mapping — cache result in Phase 1 orchestration."""
-        raise NotImplementedError("Phase 1: implement fetch_mapping (HANDOFF §4.1)")
+        """GET /mapping — static item metadata (id, name, limit, members, ...).
+
+        Returned as a bare list; cache once per process (rarely changes).
+        """
+        payload = self._get("/mapping")
+        if not isinstance(payload, list):
+            raise ValueError("/mapping did not return a list")
+        return payload
 
     def fetch_latest(self) -> dict[str, dict[str, Any]]:
-        """GET /latest — keyed by item id string."""
-        raise NotImplementedError("Phase 1: implement fetch_latest (HANDOFF §4.1)")
+        """GET /latest — instabuy/instasell prices keyed by item-id string."""
+        return self._get_data("/latest")
 
     def fetch_1h(self) -> dict[str, dict[str, Any]]:
-        """GET /1h volume aggregates."""
-        raise NotImplementedError("Phase 1: implement fetch_1h (HANDOFF §4.1)")
+        """GET /1h — hourly avg price + volume aggregates, keyed by item-id string."""
+        return self._get_data("/1h")
+
+    def _get_data(self, path: str) -> dict[str, dict[str, Any]]:
+        payload = self._get(path)
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            raise ValueError(f"{path} response missing 'data' object")
+        return data
 
     def _get(self, path: str) -> Any:
         url = f"{WIKI_BASE}{path}"
         log.debug("GET %s", url)
-        response = self._session.get(url, timeout=30)
+        response = self._session.get(url, timeout=_TIMEOUT_SECONDS)
         response.raise_for_status()
         return response.json()

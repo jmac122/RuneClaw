@@ -8,6 +8,8 @@ import logging
 import sys
 from pathlib import Path
 
+import requests
+
 # Allow `python ge_flip_watcher.py` from companion/ without installing the package.
 _COMPANION_ROOT = Path(__file__).resolve().parent
 if str(_COMPANION_ROOT.parent) not in sys.path:
@@ -36,6 +38,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run a single scan and print ranked opportunities (Phase 1)",
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=25,
+        help="Max opportunities to print (0 = all). Default: 25",
+    )
     return parser
 
 
@@ -47,7 +55,13 @@ def cmd_once(args: argparse.Namespace) -> int:
     if not opportunities:
         log.info("No opportunities matched filters.")
         return 0
-    for i, opp in enumerate(opportunities, start=1):
+    total = len(opportunities)
+    shown = opportunities if args.limit <= 0 else opportunities[: args.limit]
+    if len(shown) < total:
+        print(f"Showing top {len(shown)} of {total} matched opportunities:")
+    else:
+        print(f"{total} opportunities matched:")
+    for i, opp in enumerate(shown, start=1):
         print(f"{i:>3}. {format_opportunity_line(opp)}")
     return 0
 
@@ -67,6 +81,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except ValueError as exc:
         print(f"Config error: {exc}", file=sys.stderr)
+        return 1
+    except requests.RequestException as exc:
+        print(f"Wiki API request failed: {exc}", file=sys.stderr)
         return 1
 
 
